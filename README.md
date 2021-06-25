@@ -3,7 +3,7 @@
 This AWS CloudFormation template can be used to automatically 
 shutdown Amazon SageMaker Notebook instances when they are not in use. This is useful for cost savings.
 
-When an Amazon SageMaker Notebook Instance is created or started, the following happens:
+With this template, when an Amazon SageMaker Notebook Instance is created or started, the following happens:
 - an AWS Lambda function checks if the notebook instance has a config rule that checks for inactivity
 - if the config rule is **not** applied, the instance is `stopped`, and the config rule is applied to the instance
 - when the notebook instance is started at a future time, the config rule will run. If the notebook instance is not in use
