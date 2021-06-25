@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Resources:
+
+  SageMakerLifecycleConfig:
+    Type: AWS::SageMaker::NotebookInstanceLifecycleConfig
+    Properties:
+      NotebookInstanceLifecycleConfigName: auto-stop
+      OnStart:
+        - Content:
+            Fn::Base64: |
+              #!/bin/bash
+
+              set -e
+
+              # OVERVIEW
+              # This script stops a SageMaker notebook once it's idle for more than 1 hour (default time)
+              # You can change the idle time for stop using the environment variable below.
+              # If you want the notebook the stop only if no browsers are open, remove the --ignore-connections flag
+              #
+              # Note that this script will fail if either condition is not met
+              #   1. Ensure the Notebook Instance has internet connectivity to fetch the example config
+              #   2. Ensure the Notebook Instance execution role permissions to SageMaker:StopNotebookInstance to stop the notebook
+              #       and SageMaker:DescribeNotebookInstance to describe the notebook.
+              #
+
+              # PARAMETERS
+              IDLE_TIME=3600
+
+              echo "Fetching the autostop script"
+              wget https://raw.githubusercontent.com/aws-samples/amazon-sagemaker-notebook-instance-lifecycle-config-samples/master/scripts/auto-stop-idle/autostop.py
+
+              echo "Starting the SageMaker autostop script in cron"
+
+              (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/bin/python $PWD/autostop.py --time $IDLE_TIME --ignore-connections") | crontab -
+
+  SageMakerNotebookLifecycleEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: CloudWatch Event Rule to apply lifecycle configuration to new notebook instances
+      EventPattern:
+        source: [ aws.sagemaker ]
+        detail-type: [ "SageMaker Notebook Instance State Change" ]
+      Name: sagemaker-notebook-lifecycle-rule
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SageMakerNotebookLifecycleConfigFunction.Arn
+          Id: lambda-target
+
+  SageMakerNotebookLifecycleConfigFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SageMakerNotebookLifecycleConfigFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SageMakerNotebookLifecycleEventRule.Arn
+
+  SageMakerNotebookLifecycleConfigFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: sagemaker-lifecycle-config
+      Handler: index.lambda_handler
+      Role: !GetAtt SageMakerNotebookLifecycleConfigRole.Arn
+      Runtime: python3.8
+      Timeout: 120
+      Code:
+        ZipFile: |
+          import boto3
+          import base64
+          import json
+
+          LIFECYCLE_CONFIG_NAME = 'auto-stop'
+
+          def lambda_handler(event, context):
+              status = event["detail"]["NotebookInstanceStatus"]
+              if status == 'InService':
+                  check_notebook_instance(event)
+              if status == 'Stopped':
+                  update_notebook_instance(event)
+              return {'statusCode': 200 }
+
+          def check_notebook_instance(event):
+              notebook_instance_name = event["detail"]["NotebookInstanceName"]
+              print(f"checking notebook instance {notebook_instance_name} for lifecycle config")
+              if "NotebookInstanceLifecycleConfigName" not in event["detail"]:
+                  print(f"stopping notebook instance {notebook_instance_name} to apply lifecycle config")
+                  boto3.client("sagemaker").stop_notebook_instance(
+                      NotebookInstanceName=notebook_instance_name)
+
+          def update_notebook_instance(event):
+              notebook_instance_name = event["detail"]["NotebookInstanceName"]
+              if "NotebookInstanceLifecycleConfigName" not in event["detail"]:
+                  print(f"updating notebook instance {notebook_instance_name} with lifecycle config")
+                  boto3.client("sagemaker").update_notebook_instance(
+                              NotebookInstanceName=notebook_instance_name,
+                              LifecycleConfigName=LIFECYCLE_CONFIG_NAME)
+
+
+  SageMakerNotebookLifecycleConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sagemaker-notebook-lifecycle-config-policy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: [ sagemaker:UpdateNotebookInstance,
+                          sagemaker:StopNotebookInstance,
+                          sagemaker:StartNotebookInstance ]
+                Resource: [ "*" ]
