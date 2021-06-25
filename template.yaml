@@ -63,6 +63,7 @@ Resources:
       Role: !GetAtt SageMakerNotebookLifecycleConfigRole.Arn
       Runtime: python3.8
       Timeout: 120
+      ReservedConcurrentExecutions: 10
       Code:
         ZipFile: |
           import boto3
@@ -113,5 +114,10 @@ Resources:
               - Effect: Allow
                 Action: [ sagemaker:UpdateNotebookInstance,
                           sagemaker:StopNotebookInstance,
-                          sagemaker:StartNotebookInstance ]
-                Resource: [ "*" ]
+                          sagemaker:StartNotebookInstance]
+                Resource: [ !Sub "arn:aws:sagemaker:${AWS::Region}:${AWS::AccountId}:notebook-instance/*" ]
+              - Effect: Allow
+                Action: [ logs:CreateLogGroup,
+                          logs:CreateLogStream,
+                          logs:PutLogEvents]
+                Resource: [ arn:aws:logs:*:*:* ]
